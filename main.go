@@ -2,8 +2,10 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	_ "github.com/lib/pq"
@@ -13,7 +15,7 @@ const (
 	host     = "localhost"
 	port     = 5432
 	user     = "postgres"
-	password = "****"
+	password = "**"
 	dbname   = "YGO"
 )
 
@@ -33,6 +35,19 @@ type deck struct {
 	MatchesLost int    `json:"matchesLost"`
 	MatchesTied int    `json:"matchesTied"`
 	TournyWins  int    `json:"tournyWins"`
+}
+
+type tourny struct {
+	Link string `json:"link"`
+}
+
+type participantField struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type participant struct {
+	participantField `json:"participant"`
 }
 
 var DB *sql.DB
@@ -58,7 +73,7 @@ func main() {
 
 	DB = db
 	PLAYER_COUNT = getCount(`SELECT COUNT(*) FROM "Players"`)
-	DECK_COUNT = getCount(`SELECT COUNT(*) FROM "PlayerDecks"`)
+	DECK_COUNT = getCount(`SELECT COUNT(*) FROM "Decks"`)
 
 	fmt.Println("Successfully connected!")
 
@@ -66,8 +81,10 @@ func main() {
 	router.GET("/players", getPlayers)
 	router.GET("/decks", getDecks)
 	router.GET("/decks/:name", getDecksByPlayer)
+
 	router.POST("/player", insertPlayer)
 	router.POST("/deck", insertDeck)
+	router.POST("/tournament", insertTournament)
 
 	router.Run("localhost:8080")
 }
@@ -114,7 +131,7 @@ func getDecksByPlayer(c *gin.Context) {
 
 	name := c.Param("name")
 
-	sqlStatement := `SELECT * FROM "PlayerDecks" WHERE "PlayerName" = $1`
+	sqlStatement := `SELECT * FROM "Decks" WHERE "PlayerName" = $1`
 	rows, err := DB.Query(sqlStatement, name)
 	if err != nil {
 		panic(err)
@@ -138,7 +155,7 @@ func getDecksByPlayer(c *gin.Context) {
 }
 
 func getDecks(c *gin.Context) {
-	sqlStatement := `SELECT * FROM "PlayerDecks" ORDER BY "PlayerName"`
+	sqlStatement := `SELECT * FROM "Decks" ORDER BY "PlayerName"`
 	rows, err := DB.Query(sqlStatement)
 	if err != nil {
 		panic(err)
@@ -189,7 +206,7 @@ func insertDeck(c *gin.Context) {
 		panic(err)
 	}
 
-	sqlStatement := `INSERT INTO "PlayerDecks"(
+	sqlStatement := `INSERT INTO "Decks"(
 		"ID", "PlayerName", "DeckName", "GamesWon", "GamesLost", "MatchesWon", "MatchesLost", "MatchesTie", "TournyWins")
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9);`
 
@@ -202,4 +219,37 @@ func insertDeck(c *gin.Context) {
 	DECK_COUNT += 1
 
 	c.IndentedJSON(http.StatusCreated, newDeck)
+}
+
+func insertTournament(c *gin.Context) {
+	var t tourny
+	var tid string
+
+	if err := c.BindJSON(&t); err != nil {
+		panic(err)
+	}
+
+	tid = strings.Split(t.Link, "/")[1]
+
+	participants := getParticipants(tid, &participant{})
+
+	fmt.Println("**********")
+	fmt.Println(participants)
+
+}
+
+func getParticipants(tid string, target interface{}) error {
+
+	apiUser := "asidhuuu"
+	apiKey := "**"
+	url := fmt.Sprintf("https://%s:%s@api.challonge.com/v1/tournaments/%s/participants.json", apiUser, apiKey, tid)
+
+	resp, err := http.Get(url)
+	if err != nil {
+		panic(err)
+	}
+
+	defer resp.Body.Close()
+
+	return json.NewDecoder(resp.Body).Decode(target)
 }
