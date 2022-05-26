@@ -42,19 +42,40 @@ type tourny struct {
 }
 
 type participantField struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID          int    `json:"id"`
+	Name        string `json:"name"`
+	GamesWon    int
+	GamesLost   int
+	MatchesWon  int
+	MatchesLost int
+	MatchesTied int
 }
 
 type participant struct {
 	participantField `json:"participant"`
 }
 
+type matchField struct {
+	Player1 int    `json:"player1_id"`
+	Player2 int    `json:"player2_id"`
+	Winner  int    `json:"winner_id"`
+	Scores  string `json:"scores_csv"`
+}
+
+type match struct {
+	matchField `json:"match"`
+}
+
 var DB *sql.DB
 var PLAYER_COUNT int
 var DECK_COUNT int
+var API_USER string
+var API_KEY string
 
 func main() {
+
+	API_USER = "asidhuuu"
+	API_KEY = "**"
 
 	psqlInfo := fmt.Sprintf("host=%s port=%d user=%s "+
 		"password=%s dbname=%s sslmode=disable",
@@ -231,18 +252,60 @@ func insertTournament(c *gin.Context) {
 
 	tid = strings.Split(t.Link, "/")[1]
 
-	participants := getParticipants(tid, &participant{})
+	participants := []participant{}
+	getParticipants(tid, &participants)
+	getScores(tid, participants)
 
-	fmt.Println("**********")
 	fmt.Println(participants)
 
 }
 
+func getScores(tid string, participants []participant) {
+
+	url := fmt.Sprintf("https://%s:%s@api.challonge.com/v1/tournaments/%s/matches.json", API_USER, API_KEY, tid)
+
+	resp, err := http.Get(url)
+	if err != nil {
+		panic(err)
+	}
+
+	defer resp.Body.Close()
+
+	matches := []match{}
+	json.NewDecoder(resp.Body).Decode(&matches)
+
+	for _, m := range matches {
+		p1 := findParticipant(m.Player1, participants)
+		p2 := findParticipant(m.Player2, participants)
+
+		var score1, score2 int
+		_, err := fmt.Sscanf(m.Scores, "%d-%d", &score1, &score2)
+		if err != nil {
+			panic(err)
+		}
+
+		p1.GamesWon += score1
+		p2.GamesWon += score2
+
+		p1.GamesLost += score2
+		p2.GamesLost += score1
+
+		if m.Winner == 0 {
+			p1.MatchesTied += 1
+			p2.MatchesTied += 1
+		} else if p1.ID == m.Winner {
+			p1.MatchesWon += 1
+			p2.MatchesLost += 1
+		} else {
+			p2.MatchesWon += 1
+			p1.MatchesLost += 1
+		}
+	}
+}
+
 func getParticipants(tid string, target interface{}) error {
 
-	apiUser := "asidhuuu"
-	apiKey := "**"
-	url := fmt.Sprintf("https://%s:%s@api.challonge.com/v1/tournaments/%s/participants.json", apiUser, apiKey, tid)
+	url := fmt.Sprintf("https://%s:%s@api.challonge.com/v1/tournaments/%s/participants.json", API_USER, API_KEY, tid)
 
 	resp, err := http.Get(url)
 	if err != nil {
@@ -252,4 +315,15 @@ func getParticipants(tid string, target interface{}) error {
 	defer resp.Body.Close()
 
 	return json.NewDecoder(resp.Body).Decode(target)
+}
+
+func findParticipant(pid int, participants []participant) *participant {
+
+	for i := 0; i < len(participants); i++ {
+		if participants[i].ID == pid {
+			return &participants[i]
+		}
+	}
+
+	panic("pid not found")
 }
