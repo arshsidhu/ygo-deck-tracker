@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"net/http"
 	"strings"
 
@@ -49,6 +50,7 @@ type participantField struct {
 	MatchesWon  int
 	MatchesLost int
 	MatchesTied int
+	Winner      bool
 }
 
 type participant struct {
@@ -228,7 +230,7 @@ func insertDeck(c *gin.Context) {
 	}
 
 	sqlStatement := `INSERT INTO "Decks"(
-		"ID", "PlayerName", "DeckName", "GamesWon", "GamesLost", "MatchesWon", "MatchesLost", "MatchesTie", "TournyWins")
+		"ID", "PlayerName", "DeckName", "GamesWon", "GamesLost", "MatchesWon", "MatchesLost", "MatchesTied", "TournyWins")
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9);`
 
 	_, err := DB.Exec(sqlStatement, DECK_COUNT+1, newDeck.PlayerName, newDeck.DeckName, newDeck.GamesWon,
@@ -255,8 +257,90 @@ func insertTournament(c *gin.Context) {
 	participants := []participant{}
 	getParticipants(tid, &participants)
 	getScores(tid, participants)
+	getWinner(tid, participants)
+	saveTournament(participants)
 
-	fmt.Println(participants)
+}
+
+func getWinner(tid string, participants []participant) {
+
+	url := fmt.Sprintf("https://challonge.com/%s", tid)
+
+	resp, _ := http.Get(url)
+
+	body, _ := ioutil.ReadAll(resp.Body)
+
+	bodyString := string(body)
+	index := strings.Index(bodyString, "<td class='text-center'>1</td>")
+
+	winnerDiv := bodyString[index : index+150]
+
+	for i := 0; i < len(participants); i++ {
+		if strings.Contains(winnerDiv, participants[i].Name) {
+			participants[i].Winner = true
+		} else {
+			participants[i].Winner = false
+		}
+	}
+
+}
+
+func saveTournament(participants []participant) {
+
+	for i := 0; i < len(participants); i++ {
+
+		var name, deckName string
+		tmp := strings.Split(participants[i].Name, "-")
+		name = strings.ToLower(strings.Trim(tmp[0], " "))
+		deckName = strings.ToLower(strings.Trim(tmp[1], " "))
+		fmt.Println(name)
+		fmt.Println(deckName)
+
+		isWinner := 0
+		if participants[i].Winner {
+			isWinner = 1
+		}
+
+		sqlStatement := `SELECT * FROM "Decks" WHERE "PlayerName" = $1 AND "DeckName" = $2`
+		row := DB.QueryRow(sqlStatement, name, deckName)
+
+		var data deck
+		switch err := row.Scan(&data.ID, &data.PlayerName, &data.DeckName,
+			&data.GamesWon, &data.GamesLost, &data.MatchesWon,
+			&data.MatchesLost, &data.MatchesTied, &data.TournyWins); err {
+		case sql.ErrNoRows:
+			sqlStatement := `INSERT INTO "Decks"(
+				"ID", "PlayerName", "DeckName", "GamesWon", "GamesLost", "MatchesWon", "MatchesLost", "MatchesTied", "TournyWins")
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9);`
+
+			_, err := DB.Exec(sqlStatement, DECK_COUNT+1, name, deckName, participants[i].GamesWon,
+				participants[i].GamesLost, participants[i].MatchesWon, participants[i].MatchesLost, participants[i].MatchesTied, isWinner)
+			if err != nil {
+				panic(err)
+			}
+
+			DECK_COUNT += 1
+		case nil:
+			data.GamesWon += participants[i].GamesWon
+			data.GamesLost += participants[i].GamesLost
+			data.MatchesWon += participants[i].MatchesWon
+			data.MatchesLost += participants[i].MatchesLost
+			data.MatchesTied += participants[i].MatchesTied
+			data.TournyWins += isWinner
+
+			sqlStatement := `UPDATE "Decks"
+				SET "GamesWon" = $3, "GamesLost" = $4, "MatchesWon" = $5, "MatchesLost" = $6, "MatchesTied" = $7, "TournyWins" = $8
+				WHERE "PlayerName" = $1 AND "DeckName" = $2`
+
+			_, err := DB.Exec(sqlStatement, name, deckName, data.GamesWon,
+				data.GamesLost, data.MatchesWon, data.MatchesLost, data.MatchesTied, data.TournyWins)
+			if err != nil {
+				panic(err)
+			}
+		default:
+			panic(err)
+		}
+	}
 
 }
 
